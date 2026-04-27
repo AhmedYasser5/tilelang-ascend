@@ -1078,8 +1078,8 @@ mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src, m
   auto srcTensorTy = src.getType().dyn_cast<mlir::TensorType>();
   ICHECK(srcTensorTy) << "src must be a tensor";
 
-  auto dstTensorTy = src.getType().dyn_cast<mlir::TensorType>();
-  ICHECK(dstTensorTy) << "dst must be a tensor";
+  auto dstTensorTy = dst.getType().dyn_cast<mlir::ShapedType>();
+  ICHECK(dstTensorTy) << "dst must be a shaped type";
 
   mlir::Type srcElemTy = mlir::getElementTypeOrSelf(src.getType());
   mlir::Type dstElemTy = mlir::getElementTypeOrSelf(dst.getType());
@@ -1119,7 +1119,7 @@ mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src, m
       mlir::hfusion::TypeFn::cast_signed);
 
   auto castDstTensor = builder.create<mlir::tensor::EmptyOp>(
-      loc, dstTensorTy, dynamicDims);
+      loc, mlir::RankedTensorType::get(dstTensorTy.getShape(), dstElemTy), dynamicDims);
   
   SmallVector<mlir::NamedAttribute> attrs;
   attrs.push_back(builder.getNamedAttr(
@@ -1145,6 +1145,20 @@ mlir::Value CodeGenTileLangNPUIRDEV::InsertSlice(
 
   auto dstTensorTy = dst_tensor.getType().dyn_cast<mlir::RankedTensorType>();
   assert(dstTensorTy && "dst_tensor must be a ranked tensor");
+
+  auto srcShape = src_slice.getType().dyn_cast<mlir::RankedTensorType>().getShape();
+  auto dstShape = dstTensorTy.getShape();
+
+  SmallVector<mlir::ReassociationIndices> reassoc;
+  for (int64_t i = 0, j = 0; i < srcShape.size(); ++i) {
+    ReassociationIndices group;
+    while(j < dstShape.size() && srcShape[i] != dstShape[j])
+      group.push_back(j++);
+    assert(!group.empty() && "group size must be greater than 0");
+    reassoc.push_back(group);
+  }
+
+  src_slice = builder.create<mlir::tensor::ExpandShapeOp>(loc, dstTensorTy, src_slice, reassoc);
 
   auto insertOp = builder.create<mlir::tensor::InsertSliceOp>(
       loc,
